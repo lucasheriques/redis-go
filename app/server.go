@@ -12,13 +12,15 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var data = make(map[string]string)
 
 const (
-	okResponse   = "+OK\r\n"
-	pingResponse = "+PONG\r\n"
+	okResponse     = "+OK\r\n"
+	pingResponse   = "+PONG\r\n"
+	nullBulkString = "$-1\r\n"
 )
 
 type Command struct {
@@ -26,19 +28,56 @@ type Command struct {
 	Args []string
 }
 
-func (command *Command) executeCommand() (string, error) {
-	log.Printf("Command: %s\n", strings.ToUpper(command.Name))
+func executeSetCommand(key, value string, additionalArgs []string) (string, error) {
+	data[key] = value
 
+	additionalArgsMap := make(map[string]string)
+
+	if len(additionalArgs) == 0 {
+		return okResponse, nil
+	}
+
+	for i := 0; i < len(additionalArgs); i += 2 {
+		additionalArgsMap[strings.ToUpper(additionalArgs[i])] = additionalArgs[i+1]
+	}
+
+	if _, ok := additionalArgsMap["PX"]; ok {
+		keyExpiration, err := strconv.Atoi(additionalArgsMap["PX"])
+		if err != nil {
+			return "", err
+		}
+
+		timer := time.After(time.Duration(keyExpiration) * time.Millisecond)
+
+		go func() {
+			<-timer
+			delete(data, key)
+		}()
+	}
+
+	return okResponse, nil
+}
+
+func executeGetCommand(key string) (string, error) {
+	value, ok := data[key]
+
+	if value == "" || !ok {
+		return nullBulkString, nil
+	}
+
+	return fmt.Sprintf("$%d\r\n%s\r\n", len(data[key]), data[key]), nil
+}
+
+func (command *Command) executeCommand() (string, error) {
 	switch command.Name {
 	case "PING":
 		return pingResponse, nil
 	case "ECHO":
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(command.Args[0]), command.Args[0]), nil
 	case "SET":
-		data[command.Args[0]] = command.Args[1]
-		return okResponse, nil
+		return executeSetCommand(command.Args[0], command.Args[1], command.Args[2:])
 	case "GET":
-		return fmt.Sprintf("$%d\r\n%s\r\n", len(data[command.Args[0]]), data[command.Args[0]]), nil
+		return executeGetCommand(command.Args[0])
 	}
 
 	return "", fmt.Errorf("-ERR unknown command %#v\r\n", command)
@@ -82,13 +121,13 @@ func handleConnection(conn net.Conn) {
 				log.Fatal(err)
 			}
 
-			log.Printf("Number of lines: %d\n", numberOfLines)
-
 			command := parseCommandFromNextNLines(scanner, numberOfLines*2)
 			response, err := command.executeCommand()
 			if err != nil {
 				log.Fatal(err)
 			}
+
+			log.Printf("Response sent: %s\n", response)
 
 			conn.Write([]byte(response))
 		}
