@@ -14,29 +14,44 @@ import (
 	"strings"
 )
 
-func getResponse() string {
-	return "+PONG\r\n"
+var data = make(map[string]string)
+
+const (
+	okResponse   = "+OK\r\n"
+	pingResponse = "+PONG\r\n"
+)
+
+type Command struct {
+	Name string
+	Args []string
 }
 
-func executeCommand(command []string) string {
-	switch strings.ToUpper(command[0]) {
+func (command *Command) executeCommand() (string, error) {
+	log.Printf("Command: %s\n", strings.ToUpper(command.Name))
+
+	switch command.Name {
 	case "PING":
-		return "+PONG\r\n"
+		return pingResponse, nil
 	case "ECHO":
-		return fmt.Sprintf("$%d\r\n%s\r\n", len(command[1]), command[1])
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(command.Args[0]), command.Args[0]), nil
+	case "SET":
+		data[command.Args[0]] = command.Args[1]
+		return okResponse, nil
+	case "GET":
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(data[command.Args[0]]), data[command.Args[0]]), nil
 	}
 
-	return "-ERR unknown command '" + command[0] + "'\r\n"
+	return "", fmt.Errorf("-ERR unknown command %#v\r\n", command)
 }
 
-func parseNextNLines(scanner *bufio.Scanner, n int) []string {
+func parseCommandFromNextNLines(scanner *bufio.Scanner, n int) *Command {
 	var lines []string
 	for i := 0; i < n; i++ {
 		scanner.Scan()
-		command := scanner.Text()
+		commandString := scanner.Text()
 
-		if command[0] == '$' {
-			_, err := strconv.Atoi(strings.Split(command, "$")[1])
+		if commandString[0] == '$' {
+			_, err := strconv.Atoi(strings.Split(commandString, "$")[1])
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -44,7 +59,15 @@ func parseNextNLines(scanner *bufio.Scanner, n int) []string {
 			lines = append(lines, scanner.Text())
 		}
 	}
-	return lines
+
+	command := &Command{
+		Name: strings.ToUpper(lines[0]),
+		Args: lines[1:],
+	}
+
+	log.Printf("Command recv: %s\n", command)
+
+	return command
 }
 
 func handleConnection(conn net.Conn) {
@@ -61,10 +84,11 @@ func handleConnection(conn net.Conn) {
 
 			log.Printf("Number of lines: %d\n", numberOfLines)
 
-			command := parseNextNLines(scanner, numberOfLines*2)
-			log.Printf("Command recv: %s", command)
-
-			response := executeCommand(command)
+			command := parseCommandFromNextNLines(scanner, numberOfLines*2)
+			response, err := command.executeCommand()
+			if err != nil {
+				log.Fatal(err)
+			}
 
 			conn.Write([]byte(response))
 		}
