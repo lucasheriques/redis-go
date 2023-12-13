@@ -6,6 +6,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -16,6 +17,8 @@ import (
 )
 
 var data = make(map[string]string)
+var dir string
+var dbfilename string
 
 const (
 	okResponse     = "+OK\r\n"
@@ -58,7 +61,7 @@ func executeSetCommand(key, value string, additionalArgs []string) (string, erro
 	return okResponse, nil
 }
 
-func executeGetCommand(key string) (string, error) {
+func executeGetKeyCommand(key string) (string, error) {
 	value, ok := data[key]
 
 	if value == "" || !ok {
@@ -66,6 +69,39 @@ func executeGetCommand(key string) (string, error) {
 	}
 
 	return fmt.Sprintf("$%d\r\n%s\r\n", len(data[key]), data[key]), nil
+}
+
+func formatArrayResponse(response []string) string {
+	responseString := fmt.Sprintf("*%d\r\n", len(response))
+
+	for _, value := range response {
+		responseString += fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
+	}
+
+	return responseString
+}
+
+func (command *Command) executeConfigCommand() (string, error) {
+	switch command.Args[0] {
+	case "GET":
+		switch command.Args[1] {
+		case "dir":
+			return formatArrayResponse([]string{"dir", dir}), nil
+		case "dbfilename":
+			return formatArrayResponse([]string{"dbfilename", dbfilename}), nil
+		}
+	case "SET":
+		switch command.Args[1] {
+		case "dir":
+			dir = command.Args[2]
+			return okResponse, nil
+		case "dbfilename":
+			dbfilename = command.Args[2]
+			return okResponse, nil
+		}
+	}
+
+	return "", fmt.Errorf("-ERR unknown command %#v\r\n", command)
 }
 
 func (command *Command) executeCommand() (string, error) {
@@ -77,7 +113,9 @@ func (command *Command) executeCommand() (string, error) {
 	case "SET":
 		return executeSetCommand(command.Args[0], command.Args[1], command.Args[2:])
 	case "GET":
-		return executeGetCommand(command.Args[0])
+		return executeGetKeyCommand(command.Args[0])
+	case "CONFIG":
+		return command.executeConfigCommand()
 	}
 
 	return "", fmt.Errorf("-ERR unknown command %#v\r\n", command)
@@ -135,6 +173,9 @@ func handleConnection(conn net.Conn) {
 }
 
 func main() {
+	flag.StringVar(&dir, "dir", "", "Directory to store RDB files")
+	flag.StringVar(&dbfilename, "dbfilename", "", "Filename to store RDB files")
+
 	listener, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
 		fmt.Println("Failed to bind to port 6379")
